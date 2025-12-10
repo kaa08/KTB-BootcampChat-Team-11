@@ -1,9 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
+import axios from 'axios';
 import { CameraIcon, CloseOutlineIcon } from '@vapor-ui/icons';
-import { Button, Text, Callout, IconButton, VStack, HStack } from '@vapor-ui/core';
+import { Button, Text, Callout, VStack, HStack } from '@vapor-ui/core';
 import { useAuth } from '@/contexts/AuthContext';
 import CustomAvatar from '@/components/CustomAvatar';
 import { Toast } from '@/components/Toast';
+import axiosInstance from '@/services/axios';
 
 const ProfileImageUpload = ({ currentImage, onImageChange }) => {
   const { user } = useAuth();
@@ -11,6 +13,16 @@ const ProfileImageUpload = ({ currentImage, onImageChange }) => {
   const [error, setError] = useState('');
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef(null);
+
+  const sanitizePresignedHeaders = (headers = {}) => {
+    const sanitized = {};
+    Object.entries(headers || {}).forEach(([key, value]) => {
+      if (!key) return;
+      if (key.toLowerCase() === 'host') return;
+      sanitized[key] = value;
+    });
+    return sanitized;
+  };
 
   // 프로필 이미지 URL 생성
   const getProfileImageUrl = (imagePath) => {
@@ -30,6 +42,8 @@ const ProfileImageUpload = ({ currentImage, onImageChange }) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    let objectUrl = null;
+
     try {
       // 이미지 파일 검증
       if (!file.type.startsWith('image/')) {
@@ -45,44 +59,54 @@ const ProfileImageUpload = ({ currentImage, onImageChange }) => {
       setError('');
 
       // 파일 미리보기 생성
-      const objectUrl = URL.createObjectURL(file);
+      objectUrl = URL.createObjectURL(file);
       setPreviewUrl(objectUrl);
 
-      // 인증 정보 확인
-      if (!user?.token) {
-        throw new Error('인증 정보가 없습니다.');
+      const metadata = {
+        originalFilename: file.name,
+        contentType: file.type || 'application/octet-stream',
+        size: file.size
+      };
+
+      const response = await axiosInstance.post(
+        '/api/users/profile-image',
+        metadata,
+        { withCredentials: true }
+      );
+
+      const { data } = response || {};
+      if (!data?.success || !data?.presignedUrl?.url) {
+        throw new Error(data?.message || '프로필 이미지 업로드 URL을 생성하지 못했습니다.');
       }
 
-      // FormData 생성
-      const formData = new FormData();
-      formData.append('profileImage', file);
-
-      // 파일 업로드 요청
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/users/profile-image`, {
-        method: 'POST',
-        headers: {
-          'x-auth-token': user?.token,
-          'x-session-id': user?.sessionId
-        },
-        body: formData
+      const uploadHeaders = sanitizePresignedHeaders({
+        ...(data.presignedUrl.headers || {}),
+        'Content-Type': file.type || 'application/octet-stream'
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || '이미지 업로드에 실패했습니다.');
-      }
+      await axios({
+        method: data.presignedUrl.method || 'PUT',
+        url: data.presignedUrl.url,
+        data: file,
+        headers: uploadHeaders
+      });
 
-      const data = await response.json();
+      if (objectUrl?.startsWith('blob:')) {
+        URL.revokeObjectURL(objectUrl);
+        objectUrl = null;
+      }
+      const finalImageUrl = getProfileImageUrl(data.imageKey);
+      setPreviewUrl(finalImageUrl);
       
       // 로컬 스토리지의 사용자 정보 업데이트
       const updatedUser = {
         ...user,
-        profileImage: data.imageUrl
+        profileImage: data.imageKey
       };
       localStorage.setItem('user', JSON.stringify(updatedUser));
 
       // 부모 컴포넌트에 변경 알림
-      onImageChange(data.imageUrl);
+      onImageChange(data.imageKey);
 
       Toast.success('프로필 이미지가 변경되었습니다.');
 
@@ -95,8 +119,9 @@ const ProfileImageUpload = ({ currentImage, onImageChange }) => {
       setPreviewUrl(getProfileImageUrl(currentImage));
       
       // 기존 objectUrl 정리
-      if (previewUrl && previewUrl.startsWith('blob:')) {
-        URL.revokeObjectURL(previewUrl);
+      if (objectUrl && objectUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(objectUrl);
+        objectUrl = null;
       }
     } finally {
       setUploading(false);
@@ -111,23 +136,9 @@ const ProfileImageUpload = ({ currentImage, onImageChange }) => {
       setUploading(true);
       setError('');
 
-      // 인증 정보 확인
-      if (!user?.token) {
-        throw new Error('인증 정보가 없습니다.');
-      }
-
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/users/profile-image`, {
-        method: 'DELETE',
-        headers: {
-          'x-auth-token': user?.token,
-          'x-session-id': user?.sessionId
-        }
+      await axiosInstance.delete('/api/users/profile-image', {
+        withCredentials: true
       });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || '이미지 삭제에 실패했습니다.');
-      }
 
       // 로컬 스토리지의 사용자 정보 업데이트
       const updatedUser = {

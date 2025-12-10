@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
 @Slf4j
@@ -97,6 +98,43 @@ public class FileUtil {
             case "audio": return "오디오";
             case "application": return "문서";
             default: return "파일";
+        }
+    }
+
+    /**
+     * 파일 메타데이터 유효성 검증 (Presigned URL 발급용)
+     */
+    public static void validateFileMetadata(String originalFilename, String contentType, Long size) {
+        if (!StringUtils.hasText(originalFilename)) {
+            throw new RuntimeException("파일명이 올바르지 않습니다.");
+        }
+
+        if (originalFilename.getBytes(StandardCharsets.UTF_8).length > 255) {
+            throw new RuntimeException("파일명이 너무 깁니다.");
+        }
+
+        if (!StringUtils.hasText(contentType) || !ALLOWED_TYPES.containsKey(contentType)) {
+            throw new RuntimeException("지원하지 않는 파일 형식입니다.");
+        }
+
+        String extension = getFileExtension(originalFilename).toLowerCase();
+        List<String> allowedExtensions = ALLOWED_TYPES.get(contentType);
+        if (allowedExtensions == null || !allowedExtensions.contains(extension)) {
+            String fileType = getFileType(contentType);
+            throw new RuntimeException(fileType + " 확장자가 올바르지 않습니다.");
+        }
+
+        String type = contentType.split("/")[0];
+        long limit = FILE_SIZE_LIMITS.getOrDefault(type, FILE_SIZE_LIMITS.get("application"));
+
+        if (size == null || size <= 0) {
+            throw new RuntimeException("파일 크기가 유효하지 않습니다.");
+        }
+
+        if (size > limit) {
+            int limitInMB = (int) (limit / 1024 / 1024);
+            String fileType = getFileType(contentType);
+            throw new RuntimeException(fileType + " 파일은 " + limitInMB + "MB를 초과할 수 없습니다.");
         }
     }
 

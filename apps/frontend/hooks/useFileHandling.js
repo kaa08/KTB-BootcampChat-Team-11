@@ -29,9 +29,7 @@ export const useFileHandling = (socketRef, currentUser, router, handleSessionErr
 
       const uploadResponse = await fileService.uploadFile(
         file,
-        (progress) => setUploadProgress(progress),
-        currentUser.token,
-        currentUser.sessionId
+        (progress) => setUploadProgress(progress)
       );
 
       if (!uploadResponse.success) {
