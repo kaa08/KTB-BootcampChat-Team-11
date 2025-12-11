@@ -192,12 +192,18 @@ public class RoomService {
 
         Room savedRoom = roomRepository.save(room);
 
-        // Publish event for room created
         try {
-            RoomResponse roomResponse = mapToRoomResponse(savedRoom, name);
+            Set<String> userIds = new HashSet<>();
+            userIds.add(savedRoom.getCreator());
+            userIds.addAll(savedRoom.getParticipantIds());
+
+            Map<String, User> userMap = userRepository.findAllById(userIds).stream()
+                    .collect(Collectors.toMap(User::getId, user -> user));
+
+            RoomResponse roomResponse = mapToRoomResponse(savedRoom, name, userMap);
             eventPublisher.publishEvent(new RoomCreatedEvent(this, roomResponse));
         } catch (Exception e) {
-            log.error("roomCreated 이벤트 발행 실패", e);
+            log.error("채팅방 생성 중 에러", e);
         }
 
         return savedRoom;
@@ -229,59 +235,19 @@ public class RoomService {
             // 채팅방 참여
             room.getParticipantIds().add(user.getId());
             room = roomRepository.save(room);
-        }
 
-        // Publish event for room updated
-        try {
-            RoomResponse roomResponse = mapToRoomResponse(room, name);
+            Set<String> userIds = new HashSet<>();
+            userIds.add(room.getCreator());
+            userIds.addAll(room.getParticipantIds());
+
+            Map<String, User> userMap = userRepository.findAllById(userIds).stream()
+                    .collect(Collectors.toMap(User::getId, u -> u));
+
+            RoomResponse roomResponse = mapToRoomResponse(room, name, userMap);
             eventPublisher.publishEvent(new RoomUpdatedEvent(this, roomId, roomResponse));
-        } catch (Exception e) {
-            log.error("roomUpdate 이벤트 발행 실패", e);
         }
 
         return room;
-    }
-
-    private RoomResponse mapToRoomResponse(Room room, String name) {
-        if (room == null)
-            return null;
-
-        User creator = null;
-        if (room.getCreator() != null) {
-            creator = userRepository.findById(room.getCreator()).orElse(null);
-        }
-
-        List<User> participants = room.getParticipantIds().stream()
-                .map(userRepository::findById)
-                .filter(Optional::isPresent)
-                .map(Optional::get)
-                .toList();
-
-        // 최근 10분간 메시지 수 조회
-        LocalDateTime tenMinutesAgo = LocalDateTime.now().minusMinutes(10);
-        long recentMessageCount = messageRepository.countRecentMessagesByRoomId(room.getId(), tenMinutesAgo);
-
-        return RoomResponse.builder()
-                .id(room.getId())
-                .name(room.getName() != null ? room.getName() : "제목 없음")
-                .hasPassword(room.isHasPassword())
-                .creator(creator != null ? UserResponse.builder()
-                        .id(creator.getId())
-                        .name(creator.getName() != null ? creator.getName() : "알 수 없음")
-                        .email(creator.getEmail() != null ? creator.getEmail() : "")
-                        .build() : null)
-                .participants(participants.stream()
-                        .filter(p -> p != null && p.getId() != null)
-                        .map(p -> UserResponse.builder()
-                                .id(p.getId())
-                                .name(p.getName() != null ? p.getName() : "알 수 없음")
-                                .email(p.getEmail() != null ? p.getEmail() : "")
-                                .build())
-                        .collect(Collectors.toList()))
-                .createdAtDateTime(room.getCreatedAt())
-                .isCreator(creator != null && creator.getId().equals(name))
-                .recentMessageCount((int) recentMessageCount)
-                .build();
     }
 
     // N+1 문제 해결용 매핑 메소드
