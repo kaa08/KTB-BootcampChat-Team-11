@@ -17,7 +17,7 @@ public class RoomCacheService {
     private final RedisTemplate<String, String> redisTemplate;
     private final ObjectMapper objectMapper;
 
-    private static final Duration ROOMS_CACHE_TTL = Duration.ofSeconds(10);
+    private static final Duration ROOMS_CACHE_TTL = Duration.ofSeconds(3);
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(RoomCacheService.class);
 
     public String buildKey(String userEmail, PageRequest pageRequest) {

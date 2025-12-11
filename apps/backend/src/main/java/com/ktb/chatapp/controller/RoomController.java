@@ -117,7 +117,7 @@ public class RoomController {
                 return ResponseEntity.ok()
                         .cacheControl(CacheControl.maxAge(Duration.ofSeconds(10)))
                         .header("Last-Modified", java.time.Instant.now().toString())
-                        .header("X-Cached", "hit")
+                        .header("X-Cache", "hit")
                         .body(cached);
             }
 
