@@ -41,7 +41,7 @@ public class SessionService {
 
             String sessionId = generateSessionId();
             long now = Instant.now().toEpochMilli();
-            
+
             Session session = Session.builder()
                     .userId(userId)
                     .sessionId(sessionId)
@@ -52,7 +52,7 @@ public class SessionService {
                     .build();
 
             session = sessionStore.save(session);
-            
+
             SessionData sessionData = toSessionData(session);
 
             return SessionCreationResult.builder()
@@ -75,14 +75,15 @@ public class SessionService {
             }
 
             Session session = sessionStore.findByUserId(userId).orElse(null);
-            
+
             if (session == null) {
                 log.warn("No session found for userId: {}", userId);
                 return SessionValidationResult.invalid("INVALID_SESSION", "세션을 찾을 수 없습니다.");
             }
 
             if (!sessionId.equals(session.getSessionId())) {
-                log.warn("Session ID mismatch for userId: {}. Provided: {}, Expected: {}", userId, sessionId, session.getSessionId());
+                log.warn("Session ID mismatch for userId: {}. Provided: {}, Expected: {}", userId, sessionId,
+                        session.getSessionId());
                 return SessionValidationResult.invalid("INVALID_SESSION", "잘못된 세션 ID입니다.");
             }
 
@@ -124,7 +125,7 @@ public class SessionService {
             session.setLastActivity(Instant.now().toEpochMilli());
             session.setExpiresAt(Instant.now().plusSeconds(SESSION_TTL_SEC));
             sessionStore.save(session);
-            
+
         } catch (Exception e) {
             log.error("Failed to update session activity for user: {}", userId, e);
         }
@@ -151,7 +152,7 @@ public class SessionService {
             throw new RuntimeException("모든 세션 삭제 중 오류가 발생했습니다.", e);
         }
     }
-    
+
     void removeSession(String userId) {
         removeSession(userId, null);
     }
@@ -159,7 +160,7 @@ public class SessionService {
     SessionData getActiveSession(String userId) {
         try {
             Session session = sessionStore.findByUserId(userId).orElse(null);
-            
+
             if (session == null) {
                 return null;
             }
@@ -170,5 +171,5 @@ public class SessionService {
             return null;
         }
     }
-    
+
 }
