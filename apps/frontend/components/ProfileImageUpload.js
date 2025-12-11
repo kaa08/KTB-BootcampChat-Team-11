@@ -15,8 +15,8 @@ const ProfileImageUpload = ({ currentImage, onImageChange }) => {
   // 프로필 이미지 URL 생성
   const getProfileImageUrl = (imagePath) => {
     if (!imagePath) return null;
-    return imagePath.startsWith('http') ? 
-      imagePath : 
+    return imagePath.startsWith('http') ?
+      imagePath :
       `${process.env.NEXT_PUBLIC_API_URL}${imagePath}`;
   };
 
@@ -73,7 +73,7 @@ const ProfileImageUpload = ({ currentImage, onImageChange }) => {
       }
 
       const data = await response.json();
-      
+
       // 로컬 스토리지의 사용자 정보 업데이트
       const updatedUser = {
         ...user,
@@ -93,7 +93,7 @@ const ProfileImageUpload = ({ currentImage, onImageChange }) => {
       console.error('Image upload error:', error);
       setError(error.message);
       setPreviewUrl(getProfileImageUrl(currentImage));
-      
+
       // 기존 objectUrl 정리
       if (previewUrl && previewUrl.startsWith('blob:')) {
         URL.revokeObjectURL(previewUrl);
@@ -171,9 +171,10 @@ const ProfileImageUpload = ({ currentImage, onImageChange }) => {
         size="xl"
         persistent={true}
         showInitials={true}
+        src={previewUrl || getProfileImageUrl(currentImage)}
         data-testid="profile-image-avatar"
       />
-      
+
       <HStack gap="$200" justifyContent="center">
         <Button
           type="button"
