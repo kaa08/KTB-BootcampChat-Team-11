@@ -74,35 +74,55 @@ class FileService {
     return { success: true };
   }
 
-  async uploadFile(file, onProgress, token, sessionId) {
+  async uploadFile(file, onProgress) {
     const validationResult = await this.validateFile(file);
     if (!validationResult.success) {
       return validationResult;
     }
 
     try {
-      const formData = new FormData();
-      formData.append('file', file);
+      const uploadUrl = this.baseUrl
+        ? `${this.baseUrl}/api/files/upload`
+        : '/api/files/upload';
+
+      const metadata = {
+        originalFilename: file.name,
+        contentType: file.type || 'application/octet-stream',
+        size: file.size
+      };
+
+      const response = await axiosInstance.post(uploadUrl, metadata, {
+        withCredentials: true
+      });
+
+      if (!response?.data?.success || !response.data?.presignedUrl?.url) {
+        return {
+          success: false,
+          message: response?.data?.message || '업로드 URL을 가져오지 못했습니다.'
+        };
+      }
+
+      const presigned = response.data.presignedUrl;
 
       const source = CancelToken.source();
       this.activeUploads.set(file.name, source);
 
-      const uploadUrl = this.baseUrl ?
-        `${this.baseUrl}/api/files/upload` :
-        '/api/files/upload';
+      const uploadHeaders = this.sanitizePresignedHeaders({
+        ...(presigned.headers || {}),
+        'Content-Type': file.type || 'application/octet-stream'
+      });
 
-      // token과 sessionId는 axios 인터셉터에서 자동으로 추가되므로
-      // 여기서는 명시적으로 전달하지 않아도 됩니다
-      const response = await axiosInstance.post(uploadUrl, formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data'
-        },
+      await axios({
+        method: presigned.method || 'PUT',
+        url: presigned.url,
+        data: file,
+        headers: uploadHeaders,
         cancelToken: source.token,
-        withCredentials: true,
         onUploadProgress: (progressEvent) => {
           if (onProgress) {
+            const total = progressEvent.total || file.size || 1;
             const percentCompleted = Math.round(
-              (progressEvent.loaded * 100) / progressEvent.total
+              (progressEvent.loaded * 100) / total
             );
             onProgress(percentCompleted);
           }
@@ -111,23 +131,9 @@ class FileService {
 
       this.activeUploads.delete(file.name);
 
-      if (!response.data || !response.data.success) {
-        return {
-          success: false,
-          message: response.data?.message || '파일 업로드에 실패했습니다.'
-        };
-      }
-
-      const fileData = response.data.file;
       return {
         success: true,
-        data: {
-          ...response.data,
-          file: {
-            ...fileData,
-            url: this.getFileUrl(fileData.filename, true)
-          }
-        }
+        data: response.data
       };
 
     } catch (error) {
@@ -147,44 +153,21 @@ class FileService {
       return this.handleUploadError(error);
     }
   }
-  async downloadFile(filename, originalname, token, sessionId) {
+
+  async downloadFile(filename, originalname) {
     try {
-      // 파일 존재 여부 먼저 확인
-      const downloadUrl = this.getFileUrl(filename, false);
-      // axios 인터셉터가 자동으로 인증 헤더를 추가합니다
-      const checkResponse = await axiosInstance.head(downloadUrl, {
-        validateStatus: status => status < 500,
-        withCredentials: true
-      });
+      const presignedResponse = await this.fetchPresignedResource(filename, 'download');
+      const presignedUrl = presignedResponse.presignedUrl;
 
-      if (checkResponse.status === 404) {
-        return {
-          success: false,
-          message: '파일을 찾을 수 없습니다.'
-        };
-      }
+      const downloadHeaders = this.sanitizePresignedHeaders(presignedUrl.headers);
 
-      if (checkResponse.status === 403) {
-        return {
-          success: false,
-          message: '파일에 접근할 권한이 없습니다.'
-        };
-      }
-
-      if (checkResponse.status !== 200) {
-        return {
-          success: false,
-          message: '파일 다운로드 준비 중 오류가 발생했습니다.'
-        };
-      }
-
-      // axios 인터셉터가 자동으로 인증 헤더를 추가합니다
-      const response = await axiosInstance({
-        method: 'GET',
-        url: downloadUrl,
+      const response = await axios({
+        method: presignedUrl.method || 'GET',
+        url: presignedUrl.url,
         responseType: 'blob',
         timeout: 30000,
-        withCredentials: true
+        withCredentials: false,
+        headers: downloadHeaders
       });
 
       const contentType = response.headers['content-type'];
@@ -230,29 +213,10 @@ class FileService {
     }
   }
 
-  getFileUrl(filename, forPreview = false) {
-    if (!filename) return '';
-
-    const baseUrl = process.env.NEXT_PUBLIC_API_URL || '';
-    const endpoint = forPreview ? 'view' : 'download';
-    return `${baseUrl}/api/files/${endpoint}/${filename}`;
-  }
-
-  getPreviewUrl(file, token, sessionId, withAuth = true) {
+  async getPreviewUrl(file) {
     if (!file?.filename) return '';
-
-    const baseUrl = `${process.env.NEXT_PUBLIC_API_URL}/api/files/view/${file.filename}`;
-
-    if (!withAuth) return baseUrl;
-
-    if (!token || !sessionId) return baseUrl;
-
-    // URL 객체 생성 전 프로토콜 확인
-    const url = new URL(baseUrl);
-    url.searchParams.append('token', encodeURIComponent(token));
-    url.searchParams.append('sessionId', encodeURIComponent(sessionId));
-
-    return url.toString();
+    const presignedResponse = await this.fetchPresignedResource(file.filename, 'view');
+    return presignedResponse?.presignedUrl?.url || '';
   }
 
   getFileType(filename) {
@@ -277,19 +241,6 @@ class FileService {
     const units = ['B', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.floor(Math.log(bytes) / Math.log(1024));
     return `${parseFloat((bytes / Math.pow(1024, i)).toFixed(2))} ${units[i]}`;
-  }
-
-  getHeaders(token, sessionId) {
-    if (!token || !sessionId) {
-      return {
-        'Accept': 'application/json, */*'
-      };
-    }
-    return {
-      'x-auth-token': token,
-      'x-session-id': sessionId,
-      'Accept': 'application/json, */*'
-    };
   }
 
   handleUploadError(error) {
@@ -457,6 +408,42 @@ class FileService {
 
     const status = error.response.status;
     return [408, 429, 500, 502, 503, 504].includes(status);
+  }
+
+  async fetchPresignedResource(filename, type = 'download') {
+    if (!filename) {
+      throw new Error('파일명이 필요합니다.');
+    }
+
+    const endpoint = type === 'view' ? 'view' : 'download';
+    const encodedFilename = encodeURIComponent(filename);
+    const url = this.baseUrl
+      ? `${this.baseUrl}/api/files/${endpoint}/${encodedFilename}`
+      : `/api/files/${endpoint}/${encodedFilename}`;
+
+    const response = await axiosInstance.get(url, {
+      withCredentials: true
+    });
+
+    if (!response?.data?.success || !response.data?.presignedUrl?.url) {
+      throw new Error(response?.data?.message || '파일 URL을 가져오지 못했습니다.');
+    }
+
+    return response.data;
+  }
+
+  sanitizePresignedHeaders(headers = {}) {
+    const sanitized = {};
+    Object.entries(headers || {}).forEach(([key, value]) => {
+      if (!key) {
+        return;
+      }
+      if (key.toLowerCase() === 'host') {
+        return;
+      }
+      sanitized[key] = value;
+    });
+    return sanitized;
   }
 }
 

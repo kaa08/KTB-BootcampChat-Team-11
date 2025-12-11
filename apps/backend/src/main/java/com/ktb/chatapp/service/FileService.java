@@ -1,16 +1,17 @@
 package com.ktb.chatapp.service;
 
-import org.springframework.core.io.Resource;
-import org.springframework.web.multipart.MultipartFile;
+import com.ktb.chatapp.dto.FileUploadRequest;
+import com.ktb.chatapp.dto.PresignedUrlResponse;
 
 public interface FileService {
 
-    FileUploadResult uploadFile(MultipartFile file, String uploaderId);
+    FileUploadResult uploadFile(FileUploadRequest request, String uploaderId);
 
-    String storeFile(MultipartFile file, String subDirectory);
+    PresignedUrlResponse storeFile(FileUploadRequest request, String subDirectory);
 
-    Resource loadFileAsResource(String fileName, String requesterId);
+    PresignedUrlResponse loadFileAsResource(String fileName, String requesterId);
 
     boolean deleteFile(String fileId, String requesterId);
-}
 
+    void deleteFileByPath(String objectKey);
+}

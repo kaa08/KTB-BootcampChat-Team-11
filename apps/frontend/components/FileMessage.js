@@ -3,17 +3,15 @@ import {
   PdfIcon as FileText,
   ImageIcon as Image,
   MovieIcon as Film,
-  MusicIcon as Music,
-  ErrorCircleIcon as AlertCircle
+  MusicIcon as Music
 } from '@vapor-ui/icons';
-import { Button, Callout, VStack, HStack } from '@vapor-ui/core';
+import { VStack, HStack } from '@vapor-ui/core';
 import CustomAvatar from './CustomAvatar';
 import MessageContent from './MessageContent';
 import MessageActions from './MessageActions';
 import FileActions from './FileActions';
 import ReadStatus from './ReadStatus';
 import fileService from '@/services/fileService';
-import { useAuth } from '@/contexts/AuthContext';
 
 const FileMessage = ({
   msg = {},
@@ -24,20 +22,47 @@ const FileMessage = ({
   room = null,
   socketRef
 }) => {
-  const { user } = useAuth();
   const [error, setError] = useState(null);
   const [previewUrl, setPreviewUrl] = useState('');
   const messageDomRef = useRef(null);
   useEffect(() => {
-    if (msg?.file) {
-      const url = fileService.getPreviewUrl(msg.file, user?.token, user?.sessionId, true);
-      setPreviewUrl(url);
-      console.debug('Preview URL generated:', {
-        filename: msg.file.filename,
-        url
-      });
-    }
-  }, [msg?.file, user?.token, user?.sessionId]);
+    let isMounted = true;
+
+    const fetchPreview = async () => {
+      const mimetype = msg?.file?.mimetype || '';
+      const isPreviewable = mimetype.startsWith('image/') ||
+        mimetype.startsWith('video/') ||
+        mimetype.startsWith('audio/') ||
+        mimetype === 'application/pdf';
+
+      if (!msg?.file?.filename || !isPreviewable) {
+        if (isMounted) {
+          setPreviewUrl('');
+        }
+        return;
+      }
+
+      try {
+        const url = await fileService.getPreviewUrl(msg.file);
+        if (isMounted) {
+          setPreviewUrl(url);
+          setError(null);
+        }
+      } catch (previewError) {
+        console.error('Preview URL fetch error:', previewError);
+        if (isMounted) {
+          setPreviewUrl('');
+          setError(previewError.message || '파일 미리보기를 불러올 수 없습니다.');
+        }
+      }
+    };
+
+    fetchPreview();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [msg?.file?.filename, msg?.file?.mimetype]);
 
   if (!msg?.file) {
     console.error('File data is missing:', msg);
@@ -106,21 +131,14 @@ const FileMessage = ({
         throw new Error('파일 정보가 없습니다.');
       }
 
-      if (!user?.token || !user?.sessionId) {
-        throw new Error('인증 정보가 없습니다.');
+      const result = await fileService.downloadFile(
+        msg.file.filename,
+        msg.file.originalname
+      );
+
+      if (!result.success) {
+        throw new Error(result.message || '파일 다운로드에 실패했습니다.');
       }
-
-      const baseUrl = fileService.getFileUrl(msg.file.filename, false);
-      const authenticatedUrl = `${baseUrl}?token=${encodeURIComponent(user?.token)}&sessionId=${encodeURIComponent(user?.sessionId)}&download=true`;
-      
-      const iframe = document.createElement('iframe');
-      iframe.style.display = 'none';
-      iframe.src = authenticatedUrl;
-      document.body.appendChild(iframe);
-
-      setTimeout(() => {
-        document.body.removeChild(iframe);
-      }, 5000);
 
     } catch (error) {
       console.error('File download error:', error);
@@ -128,7 +146,7 @@ const FileMessage = ({
     }
   };
 
-  const handleViewInNewTab = (e) => {
+  const handleViewInNewTab = async (e) => {
     e.preventDefault();
     e.stopPropagation();
     setError(null);
@@ -138,14 +156,12 @@ const FileMessage = ({
         throw new Error('파일 정보가 없습니다.');
       }
 
-      if (!user?.token || !user?.sessionId) {
-        throw new Error('인증 정보가 없습니다.');
+      const url = await fileService.getPreviewUrl(msg.file);
+      if (!url) {
+        throw new Error('파일 미리보기 URL을 생성하지 못했습니다.');
       }
 
-      const baseUrl = fileService.getFileUrl(msg.file.filename, true);
-      const authenticatedUrl = `${baseUrl}?token=${encodeURIComponent(user?.token)}&sessionId=${encodeURIComponent(user?.sessionId)}`;
-
-      const newWindow = window.open(authenticatedUrl, '_blank');
+      const newWindow = window.open(url, '_blank');
       if (!newWindow) {
         throw new Error('팝업이 차단되었습니다. 팝업 차단을 해제해주세요.');
       }
@@ -157,53 +173,37 @@ const FileMessage = ({
   };
 
   const renderImagePreview = (originalname) => {
-    try {
-      if (!msg?.file?.filename) {
-        return (
-          <div className="flex items-center justify-center h-full bg-gray-100">
-            <Image className="w-8 h-8 text-gray-400" />
-          </div>
-        );
-      }
-
-      if (!user?.token || !user?.sessionId) {
-        throw new Error('인증 정보가 없습니다.');
-      }
-
-      const previewUrl = fileService.getPreviewUrl(msg.file, user?.token, user?.sessionId, true);
-
-      return (
-        <div className="bg-transparent-pattern">
-          <img
-            src={previewUrl}
-            alt={originalname}
-            className="max-w-[400px] max-h-[400px] object-cover object-center rounded-md"
-            onLoad={() => {
-              console.debug('Image loaded successfully:', originalname);
-            }}
-            onError={(e) => {
-              console.error('Image load error:', {
-                error: e.error,
-                originalname
-              });
-              e.target.onerror = null;
-              e.target.src = '/images/placeholder-image.png';
-              setError('이미지를 불러올 수 없습니다.');
-            }}
-            loading="lazy"
-            data-testid="file-image-preview"
-          />
-        </div>
-      );
-    } catch (error) {
-      console.error('Image preview error:', error);
-      setError(error.message || '이미지 미리보기를 불러올 수 없습니다.');
+    if (!msg?.file?.filename || !previewUrl) {
       return (
         <div className="flex items-center justify-center h-full bg-gray-100">
           <Image className="w-8 h-8 text-gray-400" />
         </div>
       );
     }
+
+    return (
+      <div className="bg-transparent-pattern">
+        <img
+          src={previewUrl}
+          alt={originalname}
+          className="max-w-[400px] max-h-[400px] object-cover object-center rounded-md"
+          onLoad={() => {
+            console.debug('Image loaded successfully:', originalname);
+          }}
+          onError={(e) => {
+            console.error('Image load error:', {
+              error: e.error,
+              originalname
+            });
+            e.target.onerror = null;
+            e.target.src = '/images/placeholder-image.png';
+            setError('이미지를 불러올 수 없습니다.');
+          }}
+          loading="lazy"
+          data-testid="file-image-preview"
+        />
+      </div>
+    );
   };
 
   const renderFilePreview = () => {

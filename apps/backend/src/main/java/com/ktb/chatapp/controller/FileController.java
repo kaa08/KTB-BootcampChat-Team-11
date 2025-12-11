@@ -1,5 +1,9 @@
 package com.ktb.chatapp.controller;
 
+import com.ktb.chatapp.dto.FileResponse;
+import com.ktb.chatapp.dto.FileUploadRequest;
+import com.ktb.chatapp.dto.PresignedFileResponse;
+import com.ktb.chatapp.dto.PresignedUrlResponse;
 import com.ktb.chatapp.dto.StandardResponse;
 import com.ktb.chatapp.model.File;
 import com.ktb.chatapp.model.User;
@@ -14,21 +18,15 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import jakarta.servlet.http.HttpServletRequest;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
+import jakarta.validation.Valid;
 import java.security.Principal;
 import java.util.HashMap;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.core.io.Resource;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.multipart.MultipartFile;
 
 @Tag(name = "파일 (Files)", description = "파일 업로드 및 다운로드 API")
 @Slf4j
@@ -58,28 +56,21 @@ public class FileController {
     })
     @PostMapping("/upload")
     public ResponseEntity<?> uploadFile(
-            @Parameter(description = "업로드할 파일") @RequestParam("file") MultipartFile file,
+            @Parameter(description = "업로드할 파일 메타데이터") @Valid @RequestBody FileUploadRequest uploadRequest,
             Principal principal) {
         try {
             User user = userRepository.findByEmail(principal.getName())
                     .orElseThrow(() -> new UsernameNotFoundException("User not found: " + principal.getName()));
 
-            FileUploadResult result = fileService.uploadFile(file, user.getId());
+            FileUploadResult result = fileService.uploadFile(uploadRequest, user.getId());
 
             if (result.isSuccess()) {
-                Map<String, Object> response = new HashMap<>();
-                response.put("success", true);
-                response.put("message", "파일 업로드 성공");
-                
-                Map<String, Object> fileData = new HashMap<>();
-                fileData.put("_id", result.getFile().getId());
-                fileData.put("filename", result.getFile().getFilename());
-                fileData.put("originalname", result.getFile().getOriginalname());
-                fileData.put("mimetype", result.getFile().getMimetype());
-                fileData.put("size", result.getFile().getSize());
-                fileData.put("uploadDate", result.getFile().getUploadDate());
-                
-                response.put("file", fileData);
+                PresignedFileResponse response = PresignedFileResponse.builder()
+                        .success(true)
+                        .message("파일 업로드 URL이 생성되었습니다.")
+                        .file(FileResponse.from(result.getFile()))
+                        .presignedUrl(result.getPresignedUrl())
+                        .build();
 
                 return ResponseEntity.ok(response);
             } else {
@@ -117,35 +108,24 @@ public class FileController {
     @GetMapping("/download/{filename:.+}")
     public ResponseEntity<?> downloadFile(
             @Parameter(description = "다운로드할 파일명") @PathVariable String filename,
-            HttpServletRequest request,
             Principal principal) {
         try {
             User user = userRepository.findByEmail(principal.getName())
                     .orElseThrow(() -> new UsernameNotFoundException("User not found: " + principal.getName()));
 
-            Resource resource = fileService.loadFileAsResource(filename, user.getId());
-
             File fileEntity = fileRepository.findByFilename(filename)
-                    .orElse(null);
+                    .orElseThrow(() -> new RuntimeException("파일을 찾을 수 없습니다."));
 
-            String originalFilename = fileEntity != null ? fileEntity.getOriginalname() : filename;
-            String encodedFilename = URLEncoder.encode(originalFilename, StandardCharsets.UTF_8)
-                    .replaceAll("\\+", "%20");
+            PresignedUrlResponse presignedUrl = fileService.loadFileAsResource(filename, user.getId());
 
-            String contentDisposition = String.format(
-                    "attachment; filename*=UTF-8''%s",
-                    encodedFilename
-            );
+            PresignedFileResponse response = PresignedFileResponse.builder()
+                    .success(true)
+                    .message("파일 다운로드 URL이 생성되었습니다.")
+                    .file(FileResponse.from(fileEntity))
+                    .presignedUrl(presignedUrl)
+                    .build();
 
-            long contentLength = fileEntity != null ? fileEntity.getSize() : resource.contentLength();
-
-            return ResponseEntity.ok()
-                    .contentType(MediaType.parseMediaType(fileEntity.getMimetype()))
-                    .contentLength(contentLength)
-                    .header(HttpHeaders.CONTENT_DISPOSITION, contentDisposition)
-                    .header(HttpHeaders.CACHE_CONTROL, "private, no-cache, no-store, must-revalidate")
-                    .header(HttpHeaders.ACCESS_CONTROL_EXPOSE_HEADERS, "Content-Disposition")
-                    .body(resource);
+            return ResponseEntity.ok(response);
 
         } catch (Exception e) {
             log.error("파일 다운로드 중 에러 발생: {}", filename, e);
@@ -190,13 +170,10 @@ public class FileController {
     @GetMapping("/view/{filename:.+}")
     public ResponseEntity<?> viewFile(
             @PathVariable String filename,
-            HttpServletRequest request,
             Principal principal) {
         try {
             User user = userRepository.findByEmail(principal.getName())
                     .orElseThrow(() -> new UsernameNotFoundException("User not found: " + principal.getName()));
-
-            Resource resource = fileService.loadFileAsResource(filename, user.getId());
 
             File fileEntity = fileRepository.findByFilename(filename)
                     .orElseThrow(() -> new RuntimeException("파일을 찾을 수 없습니다."));
@@ -207,26 +184,17 @@ public class FileController {
                 errorResponse.put("message", "미리보기를 지원하지 않는 파일 형식입니다.");
                 return ResponseEntity.status(415).body(errorResponse);
             }
+            
+            PresignedUrlResponse presignedUrl = fileService.loadFileAsResource(filename, user.getId());
 
+            PresignedFileResponse response = PresignedFileResponse.builder()
+                    .success(true)
+                    .message("파일 미리보기 URL이 생성되었습니다.")
+                    .file(FileResponse.from(fileEntity))
+                    .presignedUrl(presignedUrl)
+                    .build();
 
-            String originalFilename = fileEntity.getOriginalname();
-            String encodedFilename = URLEncoder.encode(originalFilename, StandardCharsets.UTF_8)
-                    .replaceAll("\\+", "%20");
-
-            String contentDisposition = String.format(
-                    "inline; filename=\"%s\"; filename*=UTF-8''%s",
-                    originalFilename,
-                    encodedFilename
-            );
-
-            long contentLength = fileEntity.getSize();
-
-            return ResponseEntity.ok()
-                    .contentType(MediaType.parseMediaType(fileEntity.getMimetype()))
-                    .contentLength(contentLength)
-                    .header(HttpHeaders.CONTENT_DISPOSITION, contentDisposition)
-                    .header(HttpHeaders.CACHE_CONTROL, "public, max-age=31536000, immutable")
-                    .body(resource);
+            return ResponseEntity.ok(response);
 
         } catch (Exception e) {
             log.error("파일 미리보기 중 에러 발생: {}", filename, e);
